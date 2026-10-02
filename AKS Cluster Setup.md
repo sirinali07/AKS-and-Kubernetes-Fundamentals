@@ -12,36 +12,35 @@
 
 ```mermaid
 flowchart TB
-    user(["You: kubectl / Portal / az CLI"])
-    internet(["Internet users"])
+    U["You - kubectl, Portal, az CLI"]
+    I["Internet users"]
 
-    subgraph azure["Control Plane (managed by Azure)"]
-        api["API Server"]
-        etcd[("etcd")]
-        sched["Scheduler"]
-        cm["Controller Manager"]
-        api --- etcd
-        api --- sched
-        api --- cm
+    subgraph CP["Control Plane - managed by Azure"]
+        API["API Server"]
+        ETCD["etcd"]
+        SCH["Scheduler"]
+        CM["Controller Manager"]
     end
 
-    subgraph sub["Your subscription (node resource group MC_*)"]
-        subgraph sys["System node pool"]
-            n1["Node VM<br/>kubelet + kube-proxy<br/>CoreDNS, metrics-server"]
-        end
-        subgraph usr["User node pool"]
-            n2["Node VM<br/>Pod | Pod"]
-            n3["Node VM<br/>Pod | Pod"]
-        end
-        lb["Azure Load Balancer<br/>(Service type LoadBalancer)"]
+    subgraph NP["Node Pools - your VMs in your subscription"]
+        N1["System node - CoreDNS, metrics-server"]
+        N2["User node - app pods"]
+        N3["User node - app pods"]
     end
 
-    user --> api
-    api --> n1
-    api --> n2
-    api --> n3
-    internet --> lb --> n2
-    lb --> n3
+    LB["Azure Load Balancer"]
+
+    U --> API
+    API --- ETCD
+    API --- SCH
+    API --- CM
+    API --> N1
+    API --> N2
+    API --> N3
+    I --> LB
+    LB --> N2
+    LB --> N3
+ 
 ```
 
 ### Key terms
