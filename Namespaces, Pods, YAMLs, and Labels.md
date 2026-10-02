@@ -27,6 +27,18 @@ Expected output: nodes with `STATUS` = `Ready`.
 ## Key Concepts
 
 This is how the pieces fit together:
+```mermaid
+flowchart TB
+    CL["Cluster"] --> D["Namespace: default"]
+    CL --> KS["Namespace: kube-system"]
+    CL --> L["Namespace: lab-ns - you create this"]
+    L --> P1["Pod: pod-1"]
+    L --> P2["Pod: multi-container-pod"]
+    P1 --> C1["Container: nginx"]
+    P2 --> C2["Container: nginx"]
+    P2 --> C3["Container: busybox"]
+```
+
 
 ```text
 Cluster
