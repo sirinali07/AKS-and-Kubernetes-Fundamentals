@@ -39,19 +39,6 @@ flowchart TB
     P2 --> C3["Container: busybox"]
 ```
 
-
-```text
-Cluster
- ├── Namespace: default
- ├── Namespace: kube-system
- └── Namespace: lab-ns            <- you create this
-      ├── Pod: pod-1
-      │    └── Container: nginx
-      └── Pod: multi-container-pod
-           ├── Container: nginx
-           └── Container: busybox
-```
-
 **Container**
 A packaged application (code plus everything it needs to run) built from an image, such as `nginx`. Containers are lightweight and start in seconds.
 
