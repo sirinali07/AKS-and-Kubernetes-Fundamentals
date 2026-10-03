@@ -136,15 +136,6 @@ kubectl -n ingress-nginx exec deploy/ingress-nginx-controller -- cat /etc/nginx/
 | **Built into Kubernetes?** | ✅ The API object is | ❌ Must be installed |
 | **In this lab** | `rewrite` in `ingress-ns` | `ingress-nginx-controller` in `ingress-nginx` |
 
-```mermaid
-flowchart LR
-    A["You: kubectl apply -f ingressrule.yaml"] --> B[("Kubernetes API / etcd<br/>stores Ingress object")]
-    B -- "watch" --> C["Ingress Controller pod<br/>(NGINX)"]
-    C -- "generates & reloads" --> D["nginx.conf<br/>location /test → nginx-svc"]
-    E["Incoming HTTP traffic"] --> C
-    C --> F["Backend Service → Pods"]
-```
-
 ### The building blocks
 
 | Component | What it is | In this lab |
@@ -156,64 +147,12 @@ flowchart LR
 | **Backend Services** | Ordinary `ClusterIP` services in front of the app pods. | `httpd-svc:80`, `nginx-svc:8080` |
 | **Endpoints** | The actual pod IP:port pairs behind each Service. NGINX sends traffic straight to them. | 2× httpd pods, 2× nginx pods |
 
-### Architecture on AKS
-
-```mermaid
-flowchart LR
-    U["User / curl / Browser"] -->|"http://PUBLIC-IP/..."| ALB
-
-    subgraph Azure["Azure"]
-        ALB["Azure Load Balancer<br/>(public IP)"]
-    end
-
-    subgraph AKS["AKS Cluster"]
-        subgraph NSI["namespace: ingress-nginx"]
-            CSVC["Service: ingress-nginx-controller<br/>type: LoadBalancer"]
-            CTRL["Pod: ingress-nginx-controller<br/>(NGINX reverse proxy)"]
-        end
-
-        subgraph NSA["namespace: ingress-ns"]
-            ING[/"Ingress: rewrite<br/>ingressClassName: nginx"/]
-            HSVC["Service: httpd-svc<br/>port 80"]
-            NSVC["Service: nginx-svc<br/>port 8080 → targetPort 80"]
-            H1["httpd pod"]
-            H2["httpd pod"]
-            N1["nginx pod"]
-            N2["nginx pod"]
-        end
-    end
-
-    ALB --> CSVC --> CTRL
-    ING -. "rules read via<br/>Kubernetes API" .-> CTRL
-    CTRL -->|"path: /  (everything else)"| HSVC
-    CTRL -->|"path: /test"| NSVC
-    HSVC --> H1 & H2
-    NSVC --> N1 & N2
-```
-
 ### How a request flows
 1. The client sends `GET http://<public-ip>/test/index.html`.
 2. The **Azure Load Balancer** forwards it to a node, where the `ingress-nginx-controller` Service delivers it to the **controller pod**.
 3. NGINX checks the request path against the rules from the Ingress resource. It matches `/test(/|$)(.*)`.
 4. The **rewrite-target** annotation (`/$2`) removes the `/test` prefix, so the path becomes `/index.html`. Without the rewrite, the nginx pod would look for `/test/index.html` and return **404**.
 5. NGINX proxies the request to one of the `nginx-svc` endpoints (an nginx pod on port 80) and returns the response to the client.
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant LB as Azure LB (public IP)
-    participant IC as NGINX Ingress Controller
-    participant S as nginx-svc (8080)
-    participant P as nginx pod (:80)
-
-    C->>LB: GET /test/index.html
-    LB->>IC: forward
-    Note over IC: match rule /test(/|$)(.*)<br/>rewrite /$2 → /index.html
-    IC->>S: GET /index.html
-    S->>P: to targetPort 80
-    P-->>IC: 200 OK "Welcome to nginx!"
-    IC-->>C: 200 OK
-```
 
 ### Routing types
 | Type | Example | Use |
