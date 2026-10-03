@@ -1,44 +1,107 @@
-# Lab: ConfigMaps & Secrets on AKS (Azure Kubernetes Service)
+# Lab: ConfigMaps & Secrets on AKS
 
-## Prerequisites – Connect to the existing AKS cluster
+## Theory
 
-Log in to Azure (or use **Azure Cloud Shell**, which already has `az`, `kubectl` and `vi`):
-```
-az login
-```
-```
-az account set --subscription <subscription-name-or-id>
-```
-Find your cluster and connect:
-```
-az aks list -o table
-```
-```
-az aks get-credentials --resource-group <your-resource-group> --name <your-aks-cluster-name>
-```
-```
-kubectl get nodes
-```
+### Why do we need them?
+Applications need configuration: database names, URLs, feature flags, usernames, passwords. Hard-coding these into the container image or the Pod YAML (as Task 1 does) means:
+- the image or YAML must change for every environment (dev / test / prod)
+- passwords end up in plain text in YAML files and Git
 
-Create a dedicated namespace for this lab so nothing collides with other workloads on the shared cluster, and make it the default namespace for your `kubectl` commands:
+Kubernetes solves this by **decoupling configuration from the application**. The config is stored as a separate object and **injected** into the Pod at runtime, so one image runs everywhere.
+
+### What is a ConfigMap?
+A **ConfigMap** is a Kubernetes object that stores **non-sensitive configuration data** as **key-value pairs**.
+- Values can be short strings (`db_user=admin`) or whole files (`nginx.conf`, `app.properties`)
+- Size limit: **1 MiB**
+- Stored in **plain text** in etcd
+- Namespaced: a Pod can only use ConfigMaps in its own namespace
+
+Ways to create one:
 ```
-kubectl create ns cm-lab
-```
-```
-kubectl config set-context --current --namespace=cm-lab
-```
-```
-kubectl config view --minify | grep namespace
+kubectl create cm <name> --from-literal=key=value     # from key-value pairs
+kubectl create cm <name> --from-file=<file>           # file name = key, file content = value
+kubectl apply -f configmap.yaml                       # declarative
 ```
 
-> All commands below run in the `cm-lab` namespace. Each task ends with a **Reset** step: a ConfigMap name can't be created twice, and a running pod's `env` can't be changed in place.
+### What is a Secret?
+A **Secret** is like a ConfigMap but meant for **sensitive data**: passwords, tokens, keys, certificates.
+- Values are stored **base64 encoded** (`data:`). Base64 is an **encoding, not encryption**: anyone who can read the Secret can decode it.
+- Kept separate from ConfigMaps so access can be restricted with **RBAC**
+- Mounted into Pods through **tmpfs** (in memory), never written to the node's disk
+- Size limit: **1 MiB**
+
+Common Secret types:
+
+| Type | Use |
+|---|---|
+| `Opaque` | Generic key-value data (default; used in this lab) |
+| `kubernetes.io/tls` | TLS certificate + private key (e.g. for Ingress) |
+| `kubernetes.io/dockerconfigjson` | Credentials for a private container registry |
+| `kubernetes.io/service-account-token` | Service account token |
+
+> On AKS, keep production secrets in **Azure Key Vault** and mount them with the **Secrets Store CSI Driver** add-on, instead of storing them only as Kubernetes Secrets.
+
+### ConfigMap vs Secret
+| | ConfigMap | Secret |
+|---|---|---|
+| Data | Non-sensitive config | Sensitive data |
+| Storage format | Plain text | Base64 encoded |
+| YAML field | `data:` | `data:` (base64) / `stringData:` (plain) |
+| `kubectl describe` shows values | ✅ Yes | ❌ No (only sizes) |
+| Example | App mode, URLs, config files | Passwords, API keys, TLS certs |
+
+```mermaid
+flowchart LR
+    subgraph NS["namespace: cm-lab"]
+        CM[("ConfigMap: cm-1<br/>db_user=admin<br/>db_pwd=1234")]
+        SEC[("Secret: secret-1<br/>db_user / db_pwd<br/>(base64)")]
+
+        subgraph POD["Pod"]
+            ENV["Environment variables<br/>$db_user, $db_pwd"]
+            VOL["Mounted files<br/>/app/token"]
+            APP["Container<br/>(nginx / httpd)"]
+        end
+    end
+
+    CM -- "envFrom / configMapKeyRef" --> ENV
+    CM -- "volume mount" --> VOL
+    SEC -- "envFrom / secretKeyRef" --> ENV
+    ENV --> APP
+    VOL --> APP
+```
 
 ---
 
-## Task 1: Inject variables directly (traditional method)
+## Prerequisites – Connect to the existing AKS cluster
+Log in to Azure:
+```
+az login
+```
+Download the credentials of your AKS cluster:
+```
+az aks get-credentials --resource-group <your-resource-group> --name <your-aks-cluster-name>
+```
+Verify the cluster nodes are `Ready`:
+```
+kubectl get nodes
+```
+Create a namespace named **cm-lab** for this lab:
+```
+kubectl create ns cm-lab
+```
+Set **cm-lab** as the default namespace for all the following commands:
+```
+kubectl config set-context --current --namespace=cm-lab
+```
+
+---
+
+## Task 1: Inject variables directly into a Pod
+Create a file named **env.yaml**:
 ```
 vi env.yaml
 ```
+Copy the following content into **env.yaml**, then save and exit (`Esc` → `:wq`):
 ```yaml
 apiVersion: v1
 kind: Pod
@@ -53,58 +116,52 @@ spec:
     ports:
     - containerPort: 80
     env:
-    - name: db_user   # key
-      value: admin    # value
+    - name: db_user
+      value: admin
     - name: db_pwd
-      value: "1234"   # numbers must be quoted
+      value: "1234"
 ```
+Create the pod from the file:
 ```
 kubectl apply -f env.yaml
 ```
-```
-kubectl get pod env-pod
-```
+Check the pod details; the variables are listed under **Environment**:
 ```
 kubectl describe pod env-pod
 ```
-Open a shell in the pod and check that the variables were passed in:
+Open a shell inside the pod:
 ```
 kubectl exec -it env-pod -- sh
 ```
-```
-echo $db_user
-```
-```
-echo $db_pwd
-```
+Print the variables (expected: `db_user=admin`, `db_pwd=1234`):
 ```
 env | grep db_
 ```
+Exit the pod shell:
 ```
 exit
 ```
-**Reset:**
+Delete the pod:
 ```
 kubectl delete pod env-pod
 ```
 
 ---
 
-## Task 2: Inject `ALL` variables from a ConfigMap (from literal)
-Create a ConfigMap:
+## Task 2: Inject `ALL` variables from a ConfigMap
+Create a ConfigMap named **cm-1** with two key-value pairs:
 ```
 kubectl create cm cm-1 --from-literal=db_user=admin --from-literal=db_pwd=1234
 ```
-```
-kubectl get cm
-```
+Check the ConfigMap data:
 ```
 kubectl describe cm cm-1
 ```
-Reference the ConfigMap in the pod YAML:
+Open **env.yaml** again and replace its content:
 ```
 vi env.yaml
 ```
+Copy the following content into **env.yaml**, then save and exit (`Esc` → `:wq`):
 ```yaml
 apiVersion: v1
 kind: Pod
@@ -122,50 +179,39 @@ spec:
     - configMapRef:
         name: cm-1
 ```
+Create the pod from the file:
 ```
 kubectl apply -f env.yaml
 ```
+Check the pod details; **Environment Variables from** shows `cm-1`:
 ```
 kubectl describe pod web-pod
 ```
-Check the variables inside the pod:
+Open a shell inside the pod:
 ```
 kubectl exec -it web-pod -- sh
 ```
-```
-echo $db_user
-```
-```
-echo $db_pwd
-```
+Print the variables (expected: `db_user=admin`, `db_pwd=1234`):
 ```
 env | grep db_
 ```
+Exit the pod shell:
 ```
 exit
 ```
-**Reset:**
+Delete the pod (keep **cm-1** for Task 3):
 ```
 kubectl delete pod web-pod
-```
-```
-kubectl delete cm cm-1
 ```
 
 ---
 
-## Task 3: Inject a `PARTICULAR` variable from a ConfigMap (from literal)
-Create the ConfigMap again:
-```
-kubectl create cm cm-1 --from-literal=db_user=admin --from-literal=db_pwd=1234
-```
-```
-kubectl describe cm cm-1
-```
-Inject only the `db_pwd` key, exposed in the pod under a new name, `db_password`:
+## Task 3: Inject a `PARTICULAR` variable from a ConfigMap
+Open **env.yaml** again and replace its content:
 ```
 vi env.yaml
 ```
+Copy the following content into **env.yaml**, then save and exit (`Esc` → `:wq`). Only the `db_pwd` key of **cm-1** is injected, under the name `db_password`:
 ```yaml
 apiVersion: v1
 kind: Pod
@@ -180,129 +226,65 @@ spec:
     ports:
     - containerPort: 80
     env:
-    - name: db_password      # variable name inside the pod
+    - name: db_password
       valueFrom:
         configMapKeyRef:
-          name: cm-1         # ConfigMap name
-          key: db_pwd        # key in the ConfigMap
+          name: cm-1
+          key: db_pwd
 ```
+Create the pod from the file:
 ```
 kubectl apply -f env.yaml
 ```
+Check the pod details:
 ```
 kubectl describe pod web-pod
 ```
-Check inside the pod:
+Open a shell inside the pod:
 ```
 kubectl exec -it web-pod -- sh
 ```
-```
-echo $db_user
-```
-```
-echo $db_pwd
-```
-```
-echo $db_password
-```
+Print the variables (expected: only `db_password=1234`; `db_user` and `db_pwd` are not set):
 ```
 env | grep db_
 ```
+Exit the pod shell:
 ```
 exit
 ```
-> **Expected:** `$db_user` and `$db_pwd` are **empty**; only `$db_password` is set (`1234`), because only that one key was injected.
-
-**Reset:**
+Delete the pod:
 ```
 kubectl delete pod web-pod
 ```
+Delete the ConfigMap:
 ```
 kubectl delete cm cm-1
 ```
 
 ---
 
-## Task 4: Inject variables from a ConfigMap (from file)
-Create a file:
+## Task 4: Mount a ConfigMap as a volume
+Create a file named **token**:
 ```
 vi token
 ```
+Copy the following text into **token**, then save and exit (`Esc` → `:wq`):
 ```
-This is CKAD Training. We are practicing Injecting variables from ConfigMaps(FromFile) into POD.
+This is CKAD Training. We are practicing mounting a ConfigMap as a volume.
 ```
-Create the ConfigMap. The file name (`token`) becomes the key, and the file contents become the value:
-```
-kubectl create cm cm-1 --from-file=token
-```
-```
-kubectl get cm
-```
-```
-kubectl describe cm cm-1
-```
-Reference it in the pod YAML:
-```
-vi env.yaml
-```
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  labels:
-    app: web
-  name: web-pod
-spec:
-  containers:
-  - image: httpd
-    name: ctr-1
-    ports:
-    - containerPort: 80
-    envFrom:
-    - configMapRef:
-        name: cm-1
-```
-```
-kubectl apply -f env.yaml
-```
-```
-kubectl describe pod web-pod
-```
-Check inside the pod:
-```
-kubectl exec -it web-pod -- sh
-```
-```
-echo $token
-```
-```
-env | grep token
-```
-```
-exit
-```
-**Reset** (keep the `token` file for Task 5):
-```
-kubectl delete pod web-pod
-```
-```
-kubectl delete cm cm-1
-```
-
----
-
-## Task 5: Inject a ConfigMap as a volume mount
-Create the ConfigMap from the same `token` file:
+Create a ConfigMap named **cm-1** from the file (the file name `token` becomes the key):
 ```
 kubectl create cm cm-1 --from-file=token
 ```
+Check the ConfigMap data:
 ```
 kubectl describe cm cm-1
 ```
-Mount it as a volume. Each key becomes a file under `/app`:
+Open **env.yaml** again and replace its content:
 ```
 vi env.yaml
 ```
+Copy the following content into **env.yaml**, then save and exit (`Esc` → `:wq`). The ConfigMap is mounted at `/app`:
 ```yaml
 apiVersion: v1
 kind: Pod
@@ -318,77 +300,65 @@ spec:
   containers:
   - image: httpd
     name: ctr-1
+    ports:
+    - containerPort: 80
     volumeMounts:
     - name: cm-volume
       mountPath: /app
-    ports:
-    - containerPort: 80
 ```
+Create the pod from the file:
 ```
 kubectl apply -f env.yaml
 ```
+Check the pod details; **Mounts** shows `/app`:
 ```
 kubectl describe pod web-pod
 ```
-Check inside the pod:
+Open a shell inside the pod:
 ```
 kubectl exec -it web-pod -- sh
 ```
-```
-ls /app
-```
+Print the mounted file (expected: the text from the **token** file):
 ```
 cat /app/token
 ```
+Exit the pod shell:
 ```
 exit
 ```
-> **Bonus:** Unlike environment variables, a mounted ConfigMap updates automatically. Run `kubectl edit cm cm-1`, change the text, wait about 60 seconds, then run `kubectl exec web-pod -- cat /app/token` again.
-
-**Reset:**
+Delete the pod:
 ```
 kubectl delete pod web-pod
 ```
+Delete the ConfigMap:
 ```
 kubectl delete cm cm-1
 ```
 
 ---
 
-## Task 6: Secrets
+## Task 5: Secrets
 
 ### Imperative
+Create a Secret named **secret-1** with two key-value pairs:
 ```
 kubectl create secret generic secret-1 --from-literal=db_user=admin --from-literal=db_pwd=123
 ```
-```
-kubectl get secret
-```
+Check the Secret (values are hidden, only sizes are shown):
 ```
 kubectl describe secret secret-1
 ```
-`describe` hides the values. View the stored (base64) data and decode one value:
-```
-kubectl get secret secret-1 -o yaml
-```
-```
-kubectl get secret secret-1 -o jsonpath='{.data.db_pwd}' | base64 -d
-```
 
 ### Declarative
-Values under `data:` must be base64 encoded. Always use `echo -n`; without `-n` a trailing newline gets encoded into the secret:
+Values under `data:` must be base64 encoded. Example of encoding a value (use `echo -n`, so no newline is encoded):
 ```
 echo -n 'root' | base64
 ```
-```
-echo -n 'user' | base64
-```
-```
-echo -n 'mypwd' | base64
-```
+Create a file named **secret.yaml**:
 ```
 vi secret.yaml
 ```
+Copy the following content into **secret.yaml**, then save and exit (`Esc` → `:wq`):
 ```yaml
 apiVersion: v1
 kind: Secret
@@ -396,31 +366,25 @@ metadata:
   name: mysql-credentials
 type: Opaque
 data:
-  ## All values are base64 encoded
-  ## Encode: echo -n '<value>' | base64
-  ## Decode: echo '<encoded-value>' | base64 -d
-
   rootpw: cm9vdA==      # root
   user: dXNlcg==        # user
   password: bXlwd2Q=    # mypwd
 ```
-> Tip: use `stringData:` instead of `data:` to write plain-text values and let Kubernetes encode them.
-
+Create the Secret from the file:
 ```
 kubectl apply -f secret.yaml
 ```
-```
-kubectl get secrets
-```
+Check the Secret:
 ```
 kubectl describe secret mysql-credentials
 ```
 
-### Inject all values from both secrets into a pod
-Secrets can be injected in the same three ways as ConfigMaps: `envFrom.secretRef`, `env.valueFrom.secretKeyRef`, or a `secret` volume.
+### Inject both Secrets into a Pod
+Create a file named **sc-pod.yaml**:
 ```
 vi sc-pod.yaml
 ```
+Copy the following content into **sc-pod.yaml**, then save and exit (`Esc` → `:wq`):
 ```yaml
 apiVersion: v1
 kind: Pod
@@ -438,54 +402,39 @@ spec:
     - secretRef:
         name: mysql-credentials
 ```
+Create the pod from the file:
 ```
 kubectl apply -f sc-pod.yaml
 ```
+Check that the pod is `Running`:
 ```
-kubectl get po
+kubectl get pod sc-pod
 ```
+Open a shell inside the pod:
 ```
 kubectl exec -it sc-pod -- sh
 ```
+Print the variables (expected: decoded plain-text values `admin`, `123`, `root`, `user`, `mypwd`):
 ```
-echo $db_user
+env | grep -E 'db_|rootpw|user|password'
 ```
-```
-echo $db_pwd
-```
-```
-echo $rootpw
-```
-```
-echo $user
-```
-```
-echo $password
-```
-```
-env
-```
+Exit the pod shell:
 ```
 exit
 ```
-> **Note:** Inside the pod the values are plain text. Kubernetes only base64-encodes Secrets; it does not encrypt them. Anyone with `get secret` RBAC rights can read them. For production on AKS, keep secrets in **Azure Key Vault** and mount them with the **Secrets Store CSI Driver** add-on (`az aks enable-addons --addons azure-keyvault-secrets-provider -g <rg> -n <cluster>`).
 
 ---
 
-## Task 7: Cleanup
-Deleting the namespace deletes every pod, ConfigMap and Secret created in this lab:
+## Task 6: Cleanup
+Delete the namespace (this deletes all pods, ConfigMaps and Secrets created in this lab):
 ```
 kubectl delete ns cm-lab
 ```
-Point your `kubectl` context back at the `default` namespace:
+Switch the default namespace back to **default**:
 ```
 kubectl config set-context --current --namespace=default
 ```
-Remove the local files:
+Delete the local files created in this lab:
 ```
 rm -f env.yaml secret.yaml sc-pod.yaml token
-```
-Verify:
-```
-kubectl get ns
 ```
