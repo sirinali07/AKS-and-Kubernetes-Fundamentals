@@ -12,11 +12,7 @@ A Kubernetes **Service** of type `ClusterIP` is reachable only from inside the c
 
 Think of it as a **routing table** or a **receptionist's directory**: "visitors asking for `/test` go to room `nginx-svc`; everyone else goes to `httpd-svc`."
 
-**Official Kubernetes diagram** (source: [kubernetes.io – Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/)):
 
-![Kubernetes Ingress – official diagram](https://kubernetes.io/docs/images/ingress.svg)
-
-The same idea as a Mermaid diagram, mapped to this lab:
 
 ```mermaid
 flowchart LR
@@ -78,40 +74,6 @@ An **Ingress Controller** is the software that **puts Ingress rules into effect*
 
 Unlike Deployments or Services, **Kubernetes does not ship with an Ingress Controller**. You install one yourself, as Task 1 of this lab does.
 
-How the Ingress Controller fits in (the controller is the piece that actually receives traffic and applies the Ingress rules):
-
-```mermaid
-flowchart LR
-    client(["Client"]) -->|"HTTP request"| lb["Azure Load Balancer<br/>(public IP)"]
-
-    subgraph cluster["AKS Cluster"]
-        subgraph ns1["namespace: ingress-nginx"]
-            csvc["Service<br/>ingress-nginx-controller<br/>(LoadBalancer)"]
-            ctrl["Ingress Controller Pod<br/>(NGINX reverse proxy)"]
-        end
-        api[("Kubernetes API")]
-        ing["Ingress<br/>rewrite"]
-        svc1["Service<br/>nginx-svc"]
-        svc2["Service<br/>httpd-svc"]
-        pods1["Pods<br/>nginx"]
-        pods2["Pods<br/>httpd"]
-    end
-
-    lb --> csvc --> ctrl
-    ing -. "stored in" .-> api
-    api -. "1. controller watches<br/>Ingress rules" .-> ctrl
-    ctrl -->|"2. /test"| svc1 --> pods1
-    ctrl -->|"2. /"| svc2 --> pods2
-
-    classDef plain fill:#ddd,stroke:#fff,stroke-width:4px,color:#000;
-    classDef k8s fill:#326ce5,stroke:#fff,stroke-width:4px,color:#fff;
-    classDef ctrlc fill:#009639,stroke:#fff,stroke-width:4px,color:#fff;
-    classDef azure fill:#0078d4,stroke:#fff,stroke-width:4px,color:#fff;
-    class client plain;
-    class ing,svc1,svc2,pods1,pods2,csvc,api k8s;
-    class ctrl ctrlc;
-    class lb azure;
-```
 
 Common Ingress Controllers:
 
@@ -127,32 +89,6 @@ You can see the controller's generated config in this lab with:
 kubectl -n ingress-nginx exec deploy/ingress-nginx-controller -- cat /etc/nginx/nginx.conf | grep -A5 "location"
 ```
 
-### Ingress vs Ingress Controller – in one line
-| | Ingress | Ingress Controller |
-|---|---|---|
-| **What** | A YAML object holding routing **rules** | A running **proxy** that enforces the rules |
-| **Kind** | `kind: Ingress` (configuration) | Deployment + Service (pods) |
-| **Analogy** | The road signs / directory | The traffic police / receptionist |
-| **Built into Kubernetes?** | ✅ The API object is | ❌ Must be installed |
-| **In this lab** | `rewrite` in `ingress-ns` | `ingress-nginx-controller` in `ingress-nginx` |
-
-### The building blocks
-
-| Component | What it is | In this lab |
-|---|---|---|
-| **Ingress resource** | A Kubernetes object (YAML) holding routing **rules**: "requests for host/path X go to service Y". On its own it is just configuration and does nothing. | `rewrite` in namespace `ingress-ns` |
-| **Ingress controller** | A pod (a reverse proxy) that **watches** Ingress resources and configures itself to apply their rules. Without a controller, Ingress objects have no effect. | `ingress-nginx-controller` in namespace `ingress-nginx` |
-| **IngressClass** | Tells Kubernetes which controller handles an Ingress (`spec.ingressClassName`). Several controllers can run in one cluster. | `nginx` |
-| **Controller Service** | How traffic reaches the controller. On AKS it's type `LoadBalancer`, so Azure assigns it a **public IP**. | `ingress-nginx-controller` (LoadBalancer) |
-| **Backend Services** | Ordinary `ClusterIP` services in front of the app pods. | `httpd-svc:80`, `nginx-svc:8080` |
-| **Endpoints** | The actual pod IP:port pairs behind each Service. NGINX sends traffic straight to them. | 2× httpd pods, 2× nginx pods |
-
-### How a request flows
-1. The client sends `GET http://<public-ip>/test/index.html`.
-2. The **Azure Load Balancer** forwards it to a node, where the `ingress-nginx-controller` Service delivers it to the **controller pod**.
-3. NGINX checks the request path against the rules from the Ingress resource. It matches `/test(/|$)(.*)`.
-4. The **rewrite-target** annotation (`/$2`) removes the `/test` prefix, so the path becomes `/index.html`. Without the rewrite, the nginx pod would look for `/test/index.html` and return **404**.
-5. NGINX proxies the request to one of the `nginx-svc` endpoints (an nginx pod on port 80) and returns the response to the client.
 
 ### Routing types
 | Type | Example | Use |
